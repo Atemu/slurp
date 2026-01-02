@@ -325,12 +325,27 @@ sub write_file {
 	seek($fh, 0, SEEK_END) if $opts->{append};
 	print {$fh} ${$buf_ref};
 	truncate($fh, tell($fh)) unless $no_truncate;
-	close($fh);
 
-	if ($opts->{atomic} && !rename($file_name, $orig_filename)) {
+	if (
+		$opts->{atomic}
+		&& (
+			!$fh->flush()
+			# We must sync in atomic mode such that the write hits the disk before the
+			# rename happens. Otherwise you can run into a situation where the rename
+			# metadata operation commits before the data write operation. If the
+			# latter then fails to commit due to i.e. a full filesystem, this would
+			# leave you with an empty file at the desired location rather than either
+			# the previous content or the new content, breaking the promise of
+			# atomicity.
+			|| !$fh->sync()
+			|| !rename($file_name, $orig_filename)
+		)
+	) {
+		close($fh);
 		@_ = ($opts, "write_file '$file_name' - rename: $!");
 		goto &_error;
 	}
+	close($fh);
 
 	return 1;
 }
